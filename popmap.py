@@ -68,6 +68,22 @@ def get_dds_header(width, height, num_mipmaps, compression):
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
                 b'\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    elif compression == 6:
+        # header for dxt3 compression
+        return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
+                b_width +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b_num_mipmaps + b'\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x20\x00\x00\x00\x04\x00' +
+                b'\x00\x00\x44\x58\x54\x33\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
+                b'\x00\x00\x00\x00\x00\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
     elif compression == 7:
         # header for dxt5 compression
         return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
@@ -100,7 +116,7 @@ def blender_add_material(blend_data, name, texture_name):
         material.use_nodes = True
         material.blend_method = 'CLIP'
         bsdf_node = material.node_tree.nodes['Principled BSDF']
-        bsdf_node.inputs['Specular IOR Level'].default_value = 0.0
+        bsdf_node.inputs['Specular'].default_value = 0.0
 
 
 def blender_add_mesh(blend_data, name, vertices, faces, uvs, uv_indices,
@@ -118,12 +134,14 @@ def blender_add_mesh(blend_data, name, vertices, faces, uvs, uv_indices,
                     for vert_index, loop_index in zip([0, 1, 2],
                                                       face.loop_indices):
                         uv_index = uv_indices[face_index][vert_index]
-                        uv_data[loop_index].uv = uvs[uv_index]
+                        u, v = uvs[uv_index]
+                        uv_data[loop_index].uv = (u, 1.0 - v)
             else:
                 for face in mesh.polygons:
                     for vert_index, loop_index in zip(face.vertices,
                                                       face.loop_indices):
-                        uv_data[loop_index].uv = uvs[vert_index]
+                        u, v = uvs[vert_index]
+                        uv_data[loop_index].uv = (u, 1.0 - v)
 
         mesh["material_ids"] = material_ids
     else:
@@ -180,9 +198,8 @@ def add_bounding_box_material(blend_data, mesh, group_name):
             material.roughness = 0.5
             bsdf_node = material.node_tree.nodes['Principled BSDF']
             bsdf_node.inputs['Base Color'].default_value = (0, 0, 0, 1)
-            bsdf_node.inputs['Specular IOR Level'].default_value = 0.0
-            bsdf_node.inputs['Emission Color'].default_value = color + (1,)
-            bsdf_node.inputs['Emission Strength'].default_value = 0.5
+            bsdf_node.inputs['Specular'].default_value = 0.0
+            bsdf_node.inputs['Emission'].default_value = color + (1,)
             bsdf_node.inputs['Alpha'].default_value = 0.2
         mesh.materials.append(material)
         return True
@@ -547,10 +564,14 @@ def import_wow(path, context, textures_only, wow_hashes):
                             reader.read_int()
                             reader.read_float(2)
                     else:
-                        raise ValueError("Unknown vertex data size " +
-                                         str(block_length) + " for "
-                                         "second mesh at hash '" + hash +
-                                         "'!")
+                        print(
+                            "Skipping unsupported second mesh at",
+                            hash,
+                            "block size:",
+                            block_length
+                        )
+                        reader.seek(0, 2)
+                        continue
 
                     # faces
                     size = reader.read_int()
@@ -633,7 +654,14 @@ def import_wow(path, context, textures_only, wow_hashes):
                 reader.read_int() # even more flags
                 if version == 9:
                     reader.read_byte(9)
+                    if reader.pos + 4 > reader.length:
+                        continue
                     reader.read_hex()
+
+                # alcuni materiali non hanno texture
+                if reader.pos + 4 > reader.length:
+                    continue
+
                 texture_hash = reader.read_hex()
 
                 material_name = hash
@@ -668,15 +696,23 @@ def import_wow(path, context, textures_only, wow_hashes):
                 else:
                     # this is a color palatte for a texture
                     reader.seek(-8, 1)
-                    color_data = reader.read(4 * 256)
+                    palette_size = 4 * 256
+
+                    if reader.pos + palette_size > reader.length:
+                        print("Truncated or unsupported palette at", hash,
+                              "- skipping palette")
+                        reader.seek(0, 2)
+                        continue
+
+                    color_data = reader.read(palette_size)
                     color_palettes[hash] = chunks(color_data, 4)
-                    if not reader.pos + 4 == reader.length:
-                        # another palette? o.O
-                        reader.read_int(24)
-                        reader.read(4 * 256)
-                        reader.read_int(8)
-                    reader.read_int()
-                    assert reader.end_of_stream()
+                    if reader.pos + 4 < reader.length:
+                        # prova a saltare eventuale seconda palette in modo sicuro
+                        remaining = reader.length - reader.pos
+                        reader.read(remaining)
+                    # footer opzionale (non sempre presente in WW / T2T)
+                    if reader.pos + 4 <= reader.length:
+                        reader.read_int()
             else:
                 # this is a real texture, not a color palette
                 texture_type = reader.read_int()
@@ -728,10 +764,18 @@ def import_wow(path, context, textures_only, wow_hashes):
                                              compression))
                     if uses_palette:
                         if not texture_type & 0x40000:
-                            palette = color_palettes[reader.read_hex()]
+                            palette_hash = reader.read_hex()
+                            if palette_hash not in color_palettes:
+                                print("Missing palette", palette_hash,
+                                      "for texture", hash, "- skipping texture")
+                                # salta i dati rimanenti della texture
+                                reader.seek(0, 2)
+                                continue
+                            palette = color_palettes[palette_hash]
+
                         size = reader.length - reader.pos - 4
                         dds.write(b''.join([palette[i] for i in
-                                            reader.read_byte(size)]))
+                        reader.read_byte(size)]))
                     else:
                         dds.write(reader.read(reader.length -
                                               reader.pos - 4))
@@ -771,8 +815,9 @@ def import_wow(path, context, textures_only, wow_hashes):
         try:
             texture_node.image = bpy.data.images.load(texture_path)
         except:
-            print("Missing texture", texture_name, "for material",
-                  material_hash, "!")
+            print("Missing texture", texture_name,
+                  "expected at", texture_path,
+                  "for material", material_hash)
             continue
         material.node_tree.links.new(bsdf_node.inputs['Base Color'],
                                      texture_node.outputs['Color'])
