@@ -116,7 +116,7 @@ def blender_add_material(blend_data, name, texture_name):
         material.use_nodes = True
         material.blend_method = 'CLIP'
         bsdf_node = material.node_tree.nodes['Principled BSDF']
-        bsdf_node.inputs['Specular'].default_value = 0.0
+        bsdf_node.inputs['Specular IOR Level'].default_value = 0.0
 
 
 def blender_add_mesh(blend_data, name, vertices, faces, uvs, uv_indices,
@@ -198,8 +198,9 @@ def add_bounding_box_material(blend_data, mesh, group_name):
             material.roughness = 0.5
             bsdf_node = material.node_tree.nodes['Principled BSDF']
             bsdf_node.inputs['Base Color'].default_value = (0, 0, 0, 1)
-            bsdf_node.inputs['Specular'].default_value = 0.0
-            bsdf_node.inputs['Emission'].default_value = color + (1,)
+            bsdf_node.inputs['Specular IOR Level'].default_value = 0.0
+            bsdf_node.inputs['Emission Color'].default_value = color + (1,)
+            bsdf_node.inputs['Emission Strength'].default_value = 0.5
             bsdf_node.inputs['Alpha'].default_value = 0.2
         mesh.materials.append(material)
         return True
@@ -564,12 +565,9 @@ def import_wow(path, context, textures_only, wow_hashes):
                             reader.read_int()
                             reader.read_float(2)
                     else:
-                        print(
-                            "Skipping unsupported second mesh at",
-                            hash,
-                            "block size:",
-                            block_length
-                        )
+                        print("Skipping unsupported second mesh at", hash,
+                              "block size:", block_length)
+                        # salta tutto il second mesh e NON continuare a leggere
                         reader.seek(0, 2)
                         continue
 
@@ -657,11 +655,11 @@ def import_wow(path, context, textures_only, wow_hashes):
                     if reader.pos + 4 > reader.length:
                         continue
                     reader.read_hex()
-
+                
                 # alcuni materiali non hanno texture
                 if reader.pos + 4 > reader.length:
                     continue
-
+                
                 texture_hash = reader.read_hex()
 
                 material_name = hash
@@ -696,20 +694,22 @@ def import_wow(path, context, textures_only, wow_hashes):
                 else:
                     # this is a color palatte for a texture
                     reader.seek(-8, 1)
+                    
                     palette_size = 4 * 256
-
                     if reader.pos + palette_size > reader.length:
                         print("Truncated or unsupported palette at", hash,
                               "- skipping palette")
                         reader.seek(0, 2)
                         continue
-
+                    
                     color_data = reader.read(palette_size)
                     color_palettes[hash] = chunks(color_data, 4)
+                    
                     if reader.pos + 4 < reader.length:
                         # prova a saltare eventuale seconda palette in modo sicuro
                         remaining = reader.length - reader.pos
                         reader.read(remaining)
+                    
                     # footer opzionale (non sempre presente in WW / T2T)
                     if reader.pos + 4 <= reader.length:
                         reader.read_int()
@@ -769,13 +769,13 @@ def import_wow(path, context, textures_only, wow_hashes):
                                 print("Missing palette", palette_hash,
                                       "for texture", hash, "- skipping texture")
                                 # salta i dati rimanenti della texture
+                                dds.close()
                                 reader.seek(0, 2)
                                 continue
                             palette = color_palettes[palette_hash]
-
                         size = reader.length - reader.pos - 4
                         dds.write(b''.join([palette[i] for i in
-                        reader.read_byte(size)]))
+                                            reader.read_byte(size)]))
                     else:
                         dds.write(reader.read(reader.length -
                                               reader.pos - 4))
@@ -818,6 +818,7 @@ def import_wow(path, context, textures_only, wow_hashes):
             print("Missing texture", texture_name,
                   "expected at", texture_path,
                   "for material", material_hash)
+            material.node_tree.nodes.remove(texture_node)
             continue
         material.node_tree.links.new(bsdf_node.inputs['Base Color'],
                                      texture_node.outputs['Color'])
