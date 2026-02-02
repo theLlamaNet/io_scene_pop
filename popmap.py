@@ -84,8 +84,18 @@ def get_dds_header(width, height, num_mipmaps, compression):
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
                 b'\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    # ... existing elif compression == 7 block ...
     elif compression == 7:
         # header for dxt5 compression
+        return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
+                b_width +
+                # ... [keep existing bytes here] ...
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    
+    # --- ADD THIS NEW SECTION ---
+    elif compression == 4:
+        # Often used for uncompressed formats; 
+        # mapping it to the same header as compression 0/1
         return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
                 b_width +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' +
@@ -94,12 +104,14 @@ def get_dds_header(width, height, num_mipmaps, compression):
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x20\x00\x00\x00\x04\x00' +
-                b'\x00\x00\x44\x58\x54\x35\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
+                b'\x00\x00\x00\x20\x00\x00\x00\x41\x00' +
+                b'\x00\x00\x00\x00\x00\x00\x20\x00\x00' +
+                b'\x00\x00\x00\xFF\x00\x00\xFF\x00\x00' +
+                b'\xFF\x00\x00\x00\x00\x00\x00\xFF' + flags2 +
                 b'\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    # ----------------------------
+
     else:
         raise ValueError("Unknown texture compression: " +
                          str(compression))
