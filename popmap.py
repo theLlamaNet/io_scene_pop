@@ -20,6 +20,10 @@ class GameObject:
 
 
 def get_dds_header(width, height, num_mipmaps, compression):
+    if compression not in (0, 1, 2, 5, 7, 11):
+        print(f"[POP IMPORT] Unknown compression {compression}, forcing DXT1")
+        compression = 2
+
     b_height = struct.pack("<I", height)
     b_width = struct.pack("<I", width)
     b_num_mipmaps = struct.pack("<I", num_mipmaps + 1)
@@ -68,8 +72,8 @@ def get_dds_header(width, height, num_mipmaps, compression):
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
                 b'\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-    elif compression == 6:
-        # header for dxt3 compression
+    elif compression == 7:
+        # header for dxt5 compression
         return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
                 b_width +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' +
@@ -79,39 +83,11 @@ def get_dds_header(width, height, num_mipmaps, compression):
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x20\x00\x00\x00\x04\x00' +
-                b'\x00\x00\x44\x58\x54\x33\x00\x00\x00' +
+                b'\x00\x00\x44\x58\x54\x35\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00' + flags2 +
                 b'\x00\x00\x00\x00\x00\x00' +
                 b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-    # ... existing elif compression == 7 block ...
-    elif compression == 7:
-        # header for dxt5 compression
-        return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
-                b_width +
-                # ... [keep existing bytes here] ...
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-    
-    # --- ADD THIS NEW SECTION ---
-    elif compression == 4:
-        # Often used for uncompressed formats; 
-        # mapping it to the same header as compression 0/1
-        return (b'\x44\x44\x53\x20\x7c\x00\x00\x00' + flags1 + b_height +
-                b_width +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b_num_mipmaps + b'\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x20\x00\x00\x00\x41\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x20\x00\x00' +
-                b'\x00\x00\x00\xFF\x00\x00\xFF\x00\x00' +
-                b'\xFF\x00\x00\x00\x00\x00\x00\xFF' + flags2 +
-                b'\x00\x00\x00\x00\x00\x00' +
-                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-    # ----------------------------
-
     else:
         raise ValueError("Unknown texture compression: " +
                          str(compression))
@@ -533,6 +509,17 @@ def import_wow(path, context, textures_only, wow_hashes):
                     unknown = reader.read_int()
                     num_vertices = reader.read_int()
                     block_length = reader.read_int()
+                    
+                    VALID_BLOCK_LENGTHS = {20, 32, 44, 52, 64}
+
+                    if block_length not in VALID_BLOCK_LENGTHS:
+                        print(
+                            f"[POP IMPORT] Skipping second mesh for hash {hash}, "
+                            f"invalid block length: {block_length}"
+                        )
+                        # salta la second mesh in modo sicuro
+                        reader.seek(reader.length)
+                        continue
 
                     # vertex data
                     vertices = []
@@ -576,12 +563,7 @@ def import_wow(path, context, textures_only, wow_hashes):
                             uvs.append(reader.read_float(2))
                             reader.read_int()
                             reader.read_float(2)
-                    else:
-                        print("Skipping unsupported second mesh at", hash,
-                              "block size:", block_length)
-                        # salta tutto il second mesh e NON continuare a leggere
-                        reader.seek(0, 2)
-                        continue
+                    
 
                     # faces
                     size = reader.read_int()
@@ -664,21 +646,21 @@ def import_wow(path, context, textures_only, wow_hashes):
                 reader.read_int() # even more flags
                 if version == 9:
                     reader.read_byte(9)
-                    if reader.pos + 4 > reader.length:
-                        continue
                     reader.read_hex()
-                
-                # alcuni materiali non hanno texture
-                if reader.pos + 4 > reader.length:
-                    continue
-                
-                texture_hash = reader.read_hex()
+                # verifica che ci siano almeno 4 byte per la texture
+                # texture reference
+                if reader.pos + 4 <= reader.length:
+                    texture_hash = reader.read_hex()
+                else:
+                    texture_hash = "00000000"
+
 
                 material_name = hash
                 texture_name = texture_hash
                 blender_add_material(blend_data, material_name,
                                      texture_name)
                 material_hashes.add(material_name)
+
 
             else:
                 if version >= 22 or version == 0:
@@ -704,25 +686,25 @@ def import_wow(path, context, textures_only, wow_hashes):
                     # what is this even?
                     pass
                 else:
-                    # this is a color palatte for a texture
+                    # possible color palette
                     reader.seek(-8, 1)
-                    
-                    palette_size = 4 * 256
-                    if reader.pos + palette_size > reader.length:
-                        print("Truncated or unsupported palette at", hash,
-                              "- skipping palette")
-                        reader.seek(0, 2)
+
+                    remaining = reader.length - reader.pos
+                    if remaining < (4 * 256):
+                        print(f"[POP IMPORT] Skipping invalid palette for texture {hash}")
+                        reader.seek(reader.length)
                         continue
-                    
-                    color_data = reader.read(palette_size)
+
+                    color_data = reader.read(4 * 256)
                     color_palettes[hash] = chunks(color_data, 4)
-                    
-                    if reader.pos + 4 < reader.length:
-                        # prova a saltare eventuale seconda palette in modo sicuro
-                        remaining = reader.length - reader.pos
-                        reader.read(remaining)
-                    
-                    # footer opzionale (non sempre presente in WW / T2T)
+
+                    # optional second palette
+                    remaining = reader.length - reader.pos
+                    if remaining >= (4 * 256 + 32):
+                        reader.read_int(24)
+                        reader.read(4 * 256)
+                        reader.read_int(8)
+
                     if reader.pos + 4 <= reader.length:
                         reader.read_int()
             else:
@@ -775,19 +757,20 @@ def import_wow(path, context, textures_only, wow_hashes):
                     dds.write(get_dds_header(width, height, num_mipmaps,
                                              compression))
                     if uses_palette:
+                        palette = None
                         if not texture_type & 0x40000:
                             palette_hash = reader.read_hex()
-                            if palette_hash not in color_palettes:
-                                print("Missing palette", palette_hash,
-                                      "for texture", hash, "- skipping texture")
-                                # salta i dati rimanenti della texture
-                                dds.close()
-                                reader.seek(0, 2)
-                                continue
-                            palette = color_palettes[palette_hash]
+                            palette = color_palettes.get(palette_hash)
+
                         size = reader.length - reader.pos - 4
-                        dds.write(b''.join([palette[i] for i in
-                                            reader.read_byte(size)]))
+                        indices = reader.read_byte(size)
+
+                        if palette is not None:
+                            dds.write(b''.join([palette[i] for i in indices]))
+                        else:
+                            print(f"[POP IMPORT] Missing palette, writing raw data for texture {hash}")
+                            dds.write(bytes(indices))
+
                     else:
                         dds.write(reader.read(reader.length -
                                               reader.pos - 4))
@@ -827,10 +810,8 @@ def import_wow(path, context, textures_only, wow_hashes):
         try:
             texture_node.image = bpy.data.images.load(texture_path)
         except:
-            print("Missing texture", texture_name,
-                  "expected at", texture_path,
-                  "for material", material_hash)
-            material.node_tree.nodes.remove(texture_node)
+            print("Missing texture", texture_name, "for material",
+                  material_hash, "!")
             continue
         material.node_tree.links.new(bsdf_node.inputs['Base Color'],
                                      texture_node.outputs['Color'])
